@@ -1,0 +1,7 @@
+concepts:
+  - code: E.data
+    label: Evidence - Data
+    definition: Mentions data, datasets, measurements, or data-driven justification.
+  - code: K.sensor
+    label: Knowledge - Sensor
+    definition: Mentions sensors, sensing, or measurement devices.

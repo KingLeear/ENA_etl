@@ -1,0 +1,11 @@
+concept_code,concept_label,lang,text,source
+E.data,Evidence - Data,en,The researchers analyzed a large dataset to determine whether the treatment improved patient outcomes.,gpt
+E.data,Evidence - Data,en,Air quality measurements collected over five years show a steady decline in particulate pollution.,gpt
+E.data,Evidence - Data,en,We justified the policy change using data from national surveys and census records.,gpt
+E.data,Evidence - Data,en,The model’s predictions were validated against real-world data from hospital admissions.,gpt
+E.data,Evidence - Data,en,"According to the latest sales data, demand increased sharply after the price reduction.",gpt
+K.sensor,Knowledge - Sensor,en,The aircraft’s pitot tube sensor measures airspeed and feeds the data to the flight computer.,gpt
+K.sensor,Knowledge - Sensor,en,A motion sensor in the hallway turns on the lights when someone walks by.,gpt
+K.sensor,Knowledge - Sensor,en,The doctor attached a pulse oximeter sensor to monitor the patient’s blood oxygen level.,gpt
+K.sensor,Knowledge - Sensor,en,Soil moisture sensors in the field help farmers decide when to irrigate.,gpt
+K.sensor,Knowledge - Sensor,en,The smartwatch uses optical sensors to track heart rate during exercise.,gpt
