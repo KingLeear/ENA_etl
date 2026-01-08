@@ -33,8 +33,13 @@ def split_zh_sentences(
     # adjustable, filter by min length
     if min_len and min_len > 0:
         sents = [s for s in sents if len(s) >= min_len]
+        return sents
 
-    return sents
+
+## another check, stop if no usable text
+    if df[text_col].dropna().astype(str).str.strip().eq("").all():
+        print(f"[STOP] Column '{text_col}' exists but contains no usable text.")
+    return
 
 
 def split_en_sentences(text: Optional[str], min_len: int = 1) -> List[str]:
@@ -54,7 +59,7 @@ def split_en_sentences(text: Optional[str], min_len: int = 1) -> List[str]:
 
     if min_len and min_len > 0:
         sents = [s for s in sents if len(s) >= min_len]
-    return sents
+        return sents
 
 def segment_csv(
     in_csv: Path,
@@ -102,17 +107,36 @@ def segment_csv(
     # 4) segmentation
     def _segment_row(x):
         t = x.get(text_col)
+        print("DEBUG raw text:", repr(t))
+
         if lang == "auto":
             l = detect_lang(str(t)) if pd.notna(t) else "en"
         else:
             l = lang
 
         if l == "zh":
-            return split_zh_sentences(t, min_len=min_len_zh)
+            segs = split_zh_sentences(t, min_len=min_len_zh)
         else:
-            return split_en_sentences(t, min_len=min_len_en)
+            segs = split_en_sentences(t, min_len=min_len_en)
+
+        print("DEBUG segments:", segs)
+        return segs
 
     df["_segments"] = df.apply(_segment_row, axis=1)
+
+    # print(f"Wrote segmented units: {out_csv} ({len(df_seg)} rows)")
+    print("DEBUG text head:", df[text_col].head(3).tolist())
+    print("DEBUG segments head:", df["_segments"].head(3).tolist())
+    print("DEBUG non-empty segments:", sum(bool(s) for s in df["_segments"] if isinstance(s, list)))
+
+# print("DEBUG: sample text values:")
+# print(df[text_col].head(5).to_list())
+
+# print("DEBUG: segments head:")
+# print(df["_segments"].head(5).to_list())
+
+# print("DEBUG: how many non-empty segments:",
+#       sum(bool(s) for s in df["_segments"] if isinstance(s, list)))
 
     # 5) explode
     cols = []
@@ -127,6 +151,20 @@ def segment_csv(
         .reset_index(drop=True)
         .rename(columns={"_segments": "text"})
     )
+
+    # In case there is error
+        # In case there is error: still write a CSV (at least headers) to avoid FileNotFound
+    out_csv = Path(out_csv)
+    out_csv.parent.mkdir(parents=True, exist_ok=True)
+
+    if df_seg.empty:
+        print("[STOP] Segmentation produced 0 units.")
+        print("       Check your column name, language, or min_len settings.")
+        df_seg = pd.DataFrame(columns=cols[:-1] + ["text"])  # replace _segments with text
+
+    df_seg.to_csv(out_csv, index=False, encoding="utf-8-sig")
+    print(f"Wrote segmented units: {out_csv} ({len(df_seg)} rows)")
+    return
 
     # 6) filter the length
     if lang == "auto":
@@ -151,9 +189,319 @@ def segment_csv(
     )
 
     out_csv.parent.mkdir(parents=True, exist_ok=True)
-    df_seg.to_csv(out_csv, index=False, encoding="utf-8")
-    print(f"✅ Wrote segmented units: {out_csv} ({len(df_seg)} rows)")
+    df_seg.to_csv(out_csv, index=False, encoding="utf-8-sig")
 
+
+
+
+######Paradigms and API#####################################################
+
+# test_paradigms.py
+from pathlib import Path
+import pandas as pd
+import yaml
+from dataclasses import dataclass
+# from openai import OpenAI
+
+@dataclass
+class Concept:
+    code: str
+    label: str
+    definition: str
+
+def load_concepts_yaml(path: Path) -> list[Concept]:
+    data = yaml.safe_load(path.read_text(encoding="utf-8"))
+    return [
+        Concept(c["code"], c.get("label", c["code"]), c.get("definition", ""))
+        for c in data.get("concepts", [])
+    ]
+
+def generate_paradigms_openai(concept: Concept, lang: str, n: int, model: str) -> list[str]:
+    from openai import OpenAI
+    client = OpenAI()
+
+    if lang == "zh":
+        lang_hint = "繁體中文"
+    else:
+        lang_hint = "English"
+
+    prompt = f"""
+Generate {n} representative example sentences for this concept.
+
+Concept: {concept.label}
+Definition: {concept.definition}
+
+Language: {lang_hint}
+One sentence per line.
+""".strip()
+
+    resp = client.responses.create(model=model, input=prompt)
+    text = resp.output_text.strip()
+    return [l.strip() for l in text.splitlines() if l.strip()]
+
+def step_paradigms(
+    concepts_yaml: Path,
+    out_csv: Path,
+    lang: str = "zh",
+    n: int = 5,
+    model: str = "gpt-5.2",
+) -> None:
+    concepts = load_concepts_yaml(concepts_yaml)
+    rows = []
+
+    for c in concepts:
+        sents = generate_paradigms_openai(c, lang=lang, n=n, model=model)
+        for s in sents:
+            rows.append({
+                "concept_code": c.code,
+                "concept_label": c.label,
+                "lang": lang,
+                "text": s,
+                "source": "gpt",
+            })
+
+    df = pd.DataFrame(rows)
+    out_csv.parent.mkdir(parents=True, exist_ok=True)
+    df.to_csv(out_csv, index=False, encoding="utf-8-sig")
+    print(f"Wrote paradigms to {out_csv}")
+
+    ####################################Train Test####################################
+
+from pathlib import Path
+import pandas as pd
+# from datasets import Dataset
+# from transformers import AutoTokenizer, AutoModelForSequenceClassification, TrainingArguments, Trainer
+# from sklearn.model_selection import train_test_split
+# from sklearn.metrics import accuracy_score, f1_score
+
+def compute_metrics(eval_pred):
+    from sklearn.metrics import accuracy_score, f1_score
+    logits, labels = eval_pred
+    preds = logits.argmax(axis=-1)
+    return {
+        "accuracy": accuracy_score(labels, preds),
+        "f1_macro": f1_score(labels, preds, average="macro"),
+    }
+
+def step_train_multiclass(
+    paradigms_csv: Path,
+    out_dir: Path,
+    backbone: str = "bert",          
+    epochs: int = 3,
+    batch_size: int = 8,
+    max_len: int = 128,
+    seed: int = 42,
+) -> None:
+    from transformers import AutoTokenizer, AutoModelForSequenceClassification, TrainingArguments, Trainer
+    from datasets import Dataset
+    from sklearn.model_selection import train_test_split
+    from pathlib import Path
+    import json
+
+    model_name = {"bert": "bert-base-uncased", "roberta": "roberta-base"}[backbone]
+
+    df = pd.read_csv(paradigms_csv).dropna(subset=["text", "concept_code"]).copy()
+    df["text"] = df["text"].astype(str).str.strip()
+    df = df[df["text"].str.len() > 0]
+
+    concepts = sorted(df["concept_code"].unique().tolist())
+    code2id = {c: i for i, c in enumerate(concepts)}
+    df["label"] = df["concept_code"].map(code2id).astype(int)
+
+    
+
+    id2code = {i: c for c, i in code2id.items()}
+
+    out_dir = Path(out_dir)
+    out_dir.mkdir(parents=True, exist_ok=True)
+
+    label_map = {
+        "code2id": code2id,
+        "id2code": id2code,
+    }
+
+    with open(out_dir / "label_map.json", "w", encoding="utf-8") as f:
+        json.dump(label_map, f, ensure_ascii=False, indent=2)
+
+    train_df, val_df = train_test_split(
+        df[["text", "label"]],
+        test_size=0.2,
+        random_state=seed,
+        stratify=df["label"],
+    )
+
+    train_ds = Dataset.from_pandas(train_df.reset_index(drop=True))
+    val_ds = Dataset.from_pandas(val_df.reset_index(drop=True))
+
+    tokenizer = AutoTokenizer.from_pretrained(model_name)
+
+    def tok(batch):
+        return tokenizer(batch["text"], truncation=True, padding="max_length", max_length=max_len)
+
+    train_ds = train_ds.map(tok, batched=True)
+    val_ds = val_ds.map(tok, batched=True)
+
+    train_ds = train_ds.rename_column("label", "labels")
+    val_ds = val_ds.rename_column("label", "labels")
+    train_ds.set_format(type="torch", columns=["input_ids", "attention_mask", "labels"])
+    val_ds.set_format(type="torch", columns=["input_ids", "attention_mask", "labels"])
+
+    model = AutoModelForSequenceClassification.from_pretrained(model_name, num_labels=len(concepts))
+
+    out_dir.mkdir(parents=True, exist_ok=True)
+
+    args = TrainingArguments(
+        output_dir=str(out_dir),
+        num_train_epochs=epochs,
+        per_device_train_batch_size=batch_size,
+        per_device_eval_batch_size=batch_size,
+        eval_strategy="epoch",
+        save_strategy="epoch",
+        load_best_model_at_end=True,
+        metric_for_best_model="f1_macro",
+        report_to="none",
+        seed=seed,
+    )
+
+    trainer = Trainer(
+        model=model,
+        args=args,
+        train_dataset=train_ds,
+        eval_dataset=val_ds,
+        tokenizer=tokenizer,
+        compute_metrics=compute_metrics,  
+    )
+
+    trainer.train()
+    trainer.save_model(str(out_dir))
+    tokenizer.save_pretrained(str(out_dir))
+
+    print(f"Saved model to {out_dir}")
+
+########Classify Test Predict#######################################
+
+def step_predict_multiclass(
+    units_csv: Path,
+    model_dir: Path,
+    out_csv: Path,
+    text_col: str = "texts",
+    batch_size: int = 16,
+    max_len: int = 128,
+) -> None:
+    import json
+    import torch
+    import pandas as pd
+    import numpy as np
+    from transformers import AutoTokenizer, AutoModelForSequenceClassification
+
+    print(f"[DEBUG] Reading units from: {units_csv.resolve()}")
+    df = pd.read_csv(units_csv)
+    if df.empty:
+        print("[STOP] Prediction skipped: no units to predict.")
+        return
+
+    model_dir = Path(model_dir)
+
+    label_map = json.loads((model_dir / "label_map.json").read_text(encoding="utf-8"))
+    code2id = label_map["code2id"]
+    id2code = {int(k): v for k, v in label_map["id2code"].items()} if isinstance(next(iter(label_map["id2code"])), str) else label_map["id2code"]
+    
+
+    
+    model = AutoModelForSequenceClassification.from_pretrained(model_dir)
+    tokenizer = AutoTokenizer.from_pretrained(model_dir)
+    model.eval()
+
+    df = pd.read_csv(units_csv)
+
+    print(f"[DEBUG] Units rows: {len(df)}")
+    print(f"[DEBUG] Units columns: {list(df.columns)}")
+    texts = df[text_col].astype(str).tolist()
+
+    print(f"[DEBUG] Number of texts: {len(texts)}")
+
+    all_probs = []
+
+    for i in range(0, len(texts), batch_size):
+        batch = texts[i : i + batch_size]
+        enc = tokenizer(
+            batch,
+            truncation=True,
+            padding=True,
+            max_length=max_len,
+            return_tensors="pt",
+        )
+        with torch.no_grad():
+            out = model(**enc)
+            probs = torch.softmax(out.logits, dim=-1).cpu().numpy()
+            all_probs.append(probs)
+
+    probs = np.vstack(all_probs)
+
+    if not all_probs:
+        print("[STOP] No predictions were generated because there were no input texts.")
+        out_csv = Path(out_csv)
+        out_csv.parent.mkdir(parents=True, exist_ok=True)
+        df.to_csv(out_csv, index=False, encoding="utf-8-sig")
+        return
+    
+
+    for idx, code in id2code.items():
+        df[f"p_{code}"] = probs[:, idx]
+
+
+    out_csv = Path(out_csv)
+    out_csv.parent.mkdir(parents=True, exist_ok=True)
+    df.to_csv(out_csv, index=False, encoding="utf-8-sig")
+
+    print(f"Wrote predictions to: {out_csv} ({len(df)} rows)")
+    return
+
+#########binarize ENA#######################################
+import numpy as np
+
+def step_binarize_ena(
+    in_csv: Path,
+    out_csv: Path,
+    mode: str,
+    threshold: float,
+    prob_prefix: str,
+    keep_cols: list[str],
+) -> None:
+    df = pd.read_csv(in_csv)
+
+    missing_keep = [c for c in keep_cols if c not in df.columns]
+    if missing_keep:
+        raise ValueError(f"Missing keep_cols in input: {missing_keep}. existing: {list(df.columns)}")
+
+    prob_cols = [c for c in df.columns if c.startswith(prob_prefix)]
+    if not prob_cols:
+        raise ValueError(f"No probability columns found with prefix '{prob_prefix}' in {in_csv}")
+
+    prob_cols = sorted(prob_cols)  
+    probs = df[prob_cols].to_numpy()
+
+    if mode == "top1":
+        top_idx = probs.argmax(axis=1)
+        coded = np.zeros_like(probs, dtype=int)
+        coded[np.arange(len(df)), top_idx] = 1
+    elif mode == "threshold":
+        coded = (probs >= threshold).astype(int)
+    else:
+        raise ValueError("mode must be one of: top1, threshold")
+
+    concept_cols = [c.replace(prob_prefix, "", 1) for c in prob_cols]
+    coded_df = pd.DataFrame(coded, columns=concept_cols)
+
+    out_df = pd.concat([df[keep_cols].reset_index(drop=True), coded_df.reset_index(drop=True)], axis=1)
+    out_csv.parent.mkdir(parents=True, exist_ok=True)
+    out_df.to_csv(out_csv, index=False, encoding="utf-8-sig")
+    print(f"Wrote ENA-coded CSV to: {out_csv}")
+
+
+
+
+#######################################
 
 def main():
     p = argparse.ArgumentParser(description="ENA local tool — CSV segmentation + GPT paradigms")
@@ -177,7 +525,33 @@ def main():
     g.add_argument("--lang", required=True, choices=["zh", "en"], help="language for paradigms")
     g.add_argument("--n", type=int, default=20, help="number of paradigms per concept")
     g.add_argument("--model", type=str, default="gpt-5.2", help="OpenAI model name")
-
+        # ---------- train_multiclass ----------
+    t = sub.add_parser("train_multiclass", help="Train a multi-class classifier from paradigms.csv")
+    t.add_argument("--paradigms_csv", required=True, type=Path, help="input paradigms csv")
+    t.add_argument("--out_dir", required=True, type=Path, help="output model directory")
+    t.add_argument("--backbone", required=True, choices=["bert", "roberta"], help="model backbone")
+    t.add_argument("--epochs", type=int, default=3)
+    t.add_argument("--batch_size", type=int, default=8)
+    t.add_argument("--max_len", type=int, default=128)
+    t.add_argument("--seed", type=int, default=42)
+        # ---------- predict_multiclass ----------
+    p = sub.add_parser("predict_multiclass", help="Predict concept probabilities for segmented units")
+    p.add_argument("--units_csv", required=True, type=Path)
+    p.add_argument("--model_dir", required=True, type=Path)
+    p.add_argument("--out_csv", required=True, type=Path)
+    p.add_argument("--text_col", default="text")
+        # ---------- binarize_ena ----------
+    b = sub.add_parser("binarize_ena", help="Convert p_* probabilities into ENA 0/1 concept columns")
+    b.add_argument("--in_csv", required=True, type=Path)
+    b.add_argument("--out_csv", required=True, type=Path)
+    b.add_argument("--mode", required=True, choices=["top1", "threshold"])
+    b.add_argument("--threshold", type=float, default=0.5)
+    b.add_argument("--prob_prefix", default="p_", help="prefix for probability columns (default: p_)")
+    b.add_argument(
+        "--keep_cols",
+        default="unit_id,student_id,segment_id,text",
+        help="comma-separated metadata columns to keep",
+    )
     args = p.parse_args()
 
     if args.cmd == "segment_csv":
@@ -200,112 +574,36 @@ def main():
             n=args.n,
             model=args.model,
         )
-        
-
-######Paradigms and API#####################################################
-
-import json
-from dataclasses import dataclass
-from typing import Dict
-import yaml
-from openai import OpenAI
-
-@dataclass
-class Concept:
-    code: str
-    label: str
-    definition: str
-
-def load_concepts_yaml(path: Path) -> list[Concept]:
-    data = yaml.safe_load(path.read_text(encoding="utf-8"))
-    concepts = []
-    for c in data.get("concepts", []):
-        concepts.append(Concept(
-            code=str(c["code"]).strip(),
-            label=str(c.get("label", c["code"])).strip(),
-            definition=str(c.get("definition", "")).strip(),
-        ))
-    if not concepts:
-        raise ValueError("concepts.yaml contains no concepts.")
-    return concepts
-
-def generate_paradigms_openai(
-    concept: Concept,
-    lang: str,
-    n: int,
-    model: str,
-) -> list[str]:
-    client = OpenAI()
-
-    if lang == "zh":
-        lang_hint = "繁體中文"
-        style_hint = "句子像學生反思或專案報告中的自然敘述。"
-    else:
-        lang_hint = "English"
-        style_hint = "Sentences should read like natural student reflective writing or project reporting."
-
-    prompt = f"""
-You are helping create a set of paradigm example sentences for a conceptual category.
-
-Concept code: {concept.code}
-Concept label: {concept.label}
-Concept definition: {concept.definition}
-
-Generate {n} short, diverse, and representative sentences that clearly express this concept.
-
-Language: {lang_hint}
-Constraints:
-- {style_hint}
-- One sentence per line.
-- Avoid duplicates and near-duplicates.
-- Do not mention the concept code or label explicitly.
-""".strip()
-
-    resp = client.responses.create(
-        model=model,
-        input=prompt,
-    )
-
-    text = resp.output_text.strip()
-
-    sents = [l.strip() for l in text.splitlines() if l.strip()]
-    return sents
-
-
-def step_paradigms(
-    concepts_yaml: Path,
-    out_csv: Path,
-    lang: str,
-    n: int,
-    model: str,
-) -> None:
-    concepts = load_concepts_yaml(concepts_yaml)
-
-    rows = []
-    for c in concepts:
-        sents = generate_paradigms_openai(
-            concept=c,
-            lang=lang,
-            n=n,
-            model=model,
+    elif args.cmd == "train_multiclass":
+        step_train_multiclass(
+            paradigms_csv=args.paradigms_csv,
+            out_dir=args.out_dir,
+            backbone=args.backbone,
+            epochs=args.epochs,
+            batch_size=args.batch_size,
+            max_len=args.max_len,
+            seed=args.seed,
         )
 
-        for s in sents:
-            rows.append({
-                "concept_code": c.code,
-                "concept_label": c.label,
-                "lang": lang,
-                "text": s.strip(),
-                "source": "gpt_paradigm",
-            })
+    elif args.cmd == "predict_multiclass":
+        step_predict_multiclass(
+            units_csv=args.units_csv,
+            model_dir=args.model_dir,
+            out_csv=args.out_csv,
+            text_col=args.text_col,
+        )
 
-    df = pd.DataFrame(rows).dropna()
-    out_csv.parent.mkdir(parents=True, exist_ok=True)
-    df.to_csv(out_csv, index=False, encoding="utf-8")
-    print(f"✅ Wrote paradigms dataset: {out_csv} ({len(df)} rows)")
+    elif args.cmd == "binarize_ena":
+        step_binarize_ena(
+            in_csv=args.in_csv,
+            out_csv=args.out_csv,
+            mode=args.mode,
+            threshold=args.threshold,
+            prob_prefix=args.prob_prefix,
+            keep_cols=[c.strip() for c in args.keep_cols.split(",") if c.strip()],
+        )
 
-
-
+        
 
 if __name__ == "__main__":
     main()
