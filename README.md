@@ -1,6 +1,6 @@
 # ENA End-to-End Pipeline (Streamlit)
 
-This project provides a full end-to-end pipeline for:
+### This project provides a full end-to-end pipeline for:
 	1.	Uploading concept definitions
 	2.	Generating paradigms using OpenAI
 	3.	Training a multiclass classifier (BERT / RoBERTa)
@@ -9,7 +9,7 @@ This project provides a full end-to-end pipeline for:
 
 ⸻
 
-Features
+### Features
 	•	Concept-driven paradigm generation (via OpenAI)
 	•	Multiclass text classification (HuggingFace Transformers)
 	•	Automatic sentence segmentation (English / Chinese / auto)
@@ -19,34 +19,36 @@ Features
 
 ⸻
 
-Requirements
+### Requirements
 	•	Python 3.11 or 3.12 recommended
 	•	macOS / Linux / Windows (macOS tested)
 	•	pip
 
 ⸻
 
-Installation
+### Installation
 
+```
 git clone <your-repo-url>
 cd <your-repo>
 python -m venv .venv
 source .venv/bin/activate
 python -m pip install -U pip
 python -m pip install -r requirements.txt
+```
 
 
 ⸻
 
-Run the App
+### Run the App
 
-streamlit run app.py
+```streamlit run app.py```
 
 Open in browser: http://localhost:XXXX
 
 ⸻
 
-OpenAI API Key
+### OpenAI API Key
 
 Enter your API key in the sidebar UI, or set it as an environment variable:
 
@@ -59,17 +61,20 @@ export OPENAI_API_KEY="your-key-here"
 
 Upload a CSV containing concept definitions.
 
-Recommended (3 columns)
+#### Recommended (3 columns)
 
-code	label	definition
-C1	claim	A claim is a contestable statement…
-C2	position	A position is a writer’s stance…
-
+| code | label | definition |
+|------|-------|------------|
+| C1 | claim | A claim is a contestable statement… |
+| C2 | position | A position is a writer’s stance… |
 Alternative (2 columns)
 
-concept	definition
-claim	A claim is…
-position	A position is…
+#### Alternative (2 columns)
+
+| concept | definition |
+|---------|------------|
+| claim | A claim is… |
+| position | A position is… |
 
 
 ⸻
@@ -114,11 +119,12 @@ Step 3 — Run Full Pipeline
 
 Produces:
 
-File	Description
-_tmp_raw.csv	Raw uploaded data
-_tmp_units.csv	Segmented sentence units
-_tmp_pred.csv	Predicted concept probabilities
-_tmp_ena.csv	ENA-ready binary matrix
+| File | Description |
+|------|-------------|
+| _tmp_raw.csv | Raw uploaded data |
+| _tmp_units.csv | Segmented sentence units |
+| _tmp_pred.csv | Predicted concept probabilities |
+| _tmp_ena.csv | ENA-ready binary matrix |
 
 
 ⸻
@@ -133,13 +139,15 @@ The final ENA CSV contains:
 
 Example:
 
-student_id	text	C1	C2
-S001	I re-read the question	1	0
+| student_id | text | C1 | C2 |
+|------------|------|----|----|
+| S001 | I re-read the question | 1 | 0 |
+| S002 | This reminded me of last class | 0 | 1 |
 
 
 ⸻
 
-Model Download / Upload
+### Model Download / Upload
 
 After training you can:
 	•	Download the model as a ZIP archive
@@ -147,7 +155,7 @@ After training you can:
 
 ⸻
 
-Training Metrics
+### Training Metrics
 
 After training, metrics are displayed as a table:
 	•	train_loss
@@ -158,7 +166,7 @@ After training, metrics are displayed as a table:
 
 ⸻
 
-Troubleshooting
+### Troubleshooting
 
 Error: The least populated classes in y have only 1 member
 
